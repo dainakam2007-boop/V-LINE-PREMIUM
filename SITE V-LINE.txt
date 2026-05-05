@@ -1,0 +1,269 @@
+SITE V-LINE
+
+
+
+from flask import Flask, request, redirect, session, url_for
+from werkzeug.security import generate_password_hash, check_password_hash
+import sqlite3, os
+
+app = Flask(__name__)
+app.secret_key = "VLINE_ULTRA_SECURE_2026"
+
+UPLOAD_FOLDER = "static"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# ================= DATABASE =================
+def db():
+    conn = sqlite3.connect("vline_final.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init():
+    c = db()
+    cur = c.cursor()
+
+    cur.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT)")
+    cur.execute("CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY, name TEXT, price REAL, size TEXT, image TEXT)")
+    cur.execute("CREATE TABLE IF NOT EXISTS cart(id INTEGER PRIMARY KEY, user_id INTEGER, product_id INTEGER, qty INTEGER)")
+    cur.execute("CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY, user_id INTEGER, product_id INTEGER, qty INTEGER)")
+
+    if not cur.execute("SELECT * FROM users WHERE username='admin'").fetchone():
+        cur.execute("INSERT INTO users(username,password,role) VALUES(?,?,?)",
+                    ("admin", generate_password_hash("admin123"), "admin"))
+
+    c.commit()
+init()
+
+# ================= DESIGN PRO =================
+style = """
+<style>
+body{margin:0;font-family:Segoe UI;background:#eef2ff}
+.nav{
+background:linear-gradient(90deg,#0a2a88,#4169e1);
+color:white;padding:15px;
+display:flex;justify-content:space-between;align-items:center
+}
+.nav a{color:white;margin:10px;text-decoration:none;font-weight:bold}
+.container{width:90%;margin:auto;padding:20px}
+.card{
+background:white;border-radius:12px;padding:15px;margin:10px;
+display:inline-block;width:250px;
+box-shadow:0 4px 15px rgba(0,0,0,0.1);
+transition:0.3s
+}
+.card:hover{transform:scale(1.05)}
+button{
+background:linear-gradient(90deg,#4169e1,#0a2a88);
+color:white;border:none;padding:10px;
+border-radius:6px;cursor:pointer
+}
+input{padding:10px;margin:5px;width:95%;border-radius:6px;border:1px solid #ccc}
+img{width:100%;height:160px;object-fit:cover;border-radius:8px}
+.title{font-size:28px;font-weight:bold;color:#0a2a88}
+</style>
+"""
+
+# ================= NAV =================
+def nav():
+    return f"""
+    <div class='nav'>
+        <div class='title'>V-LINE 🛒</div>
+        <div>
+            <a href='/'>Accueil</a>
+            <a href='/cart'>Panier</a>
+            <a href='/login'>Login</a>
+            <a href='/register'>Inscription</a>
+            <a href='/admin'>Admin</a>
+            <a href='/logout'>Logout</a>
+        </div>
+    </div>
+    """
+
+# ================= HOME =================
+@app.route("/")
+def home():
+    c = db()
+    products = c.execute("SELECT * FROM products").fetchall()
+
+    html = style + nav() + "<div class='container'><h2>Produits</h2>"
+
+    for p in products:
+        html += f"""
+        <div class='card'>
+        <img src='/static/{p['image'] if p['image'] else ''}'/>
+        <h3>{p['name']}</h3>
+        <p>{p['price']} FCFA</p>
+        <p>Taille: {p['size']}</p>
+        <a href='/add_cart/{p['id']}'><button>Ajouter au panier</button></a>
+        </div>
+        """
+
+    html += "</div>"
+    return html
+
+# ================= REGISTER =================
+@app.route("/register", methods=["GET","POST"])
+def register():
+    if request.method == "POST":
+        u = request.form.get("u")
+        p = request.form.get("p")
+
+        if not u or not p:
+            return "Champs obligatoires ❌"
+
+        try:
+            db().execute("INSERT INTO users(username,password,role) VALUES(?,?,?)",
+                         (u, generate_password_hash(p), "client"))
+            db().commit()
+            return redirect("/login")
+        except:
+            return "Utilisateur existe ❌"
+
+    return style + nav() + """
+    <div class='container'>
+    <h2>Inscription</h2>
+    <form method='post'>
+    <input name='u' placeholder='Nom'>
+    <input name='p' type='password' placeholder='Mot de passe'>
+    <button>S'inscrire</button>
+    </form>
+    </div>
+    """
+
+# ================= LOGIN =================
+@app.route("/login", methods=["GET","POST"])
+def login():
+    if request.method == "POST":
+        u = request.form.get("u")
+        p = request.form.get("p")
+
+        user = db().execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
+
+        if user and check_password_hash(user["password"], p):
+            session["user"] = user["username"]
+            session["role"] = user["role"]
+            return redirect("/admin" if user["role"]=="admin" else "/")
+
+        return "Login incorrect ❌"
+
+    return style + nav() + """
+    <div class='container'>
+    <h2>Connexion</h2>
+    <form method='post'>
+    <input name='u' placeholder='Nom'>
+    <input name='p' type='password' placeholder='Mot de passe'>
+    <button>Login</button>
+    </form>
+    </div>
+    """
+
+# ================= ADMIN =================
+@app.route("/admin")
+def admin():
+    if session.get("role")!="admin":
+        return "Accès refusé ❌"
+
+    return style + nav() + """
+    <div class='container'>
+    <h2>Dashboard Admin</h2>
+    <a href='/add_product'><button>Ajouter Produit</button></a>
+    <a href='/orders'><button>Commandes</button></a>
+    <a href='/add_admin'><button>Créer Admin</button></a>
+    </div>
+    """
+
+# ================= ADD PRODUCT =================
+@app.route("/add_product", methods=["GET","POST"])
+def add_product():
+    if session.get("role")!="admin":
+        return "Accès refusé"
+
+    if request.method=="POST":
+        name = request.form.get("name")
+        price = request.form.get("price")
+        size = request.form.get("size")
+        img = request.files.get("img")
+
+        filename = ""
+        if img and img.filename:
+            filename = img.filename
+            img.save(os.path.join(UPLOAD_FOLDER, filename))
+
+        db().execute("INSERT INTO products(name,price,size,image) VALUES(?,?,?,?)",
+                     (name,price,size,filename))
+        db().commit()
+
+        return redirect("/")
+
+    return style + nav() + """
+    <div class='container'>
+    <h2>Ajouter produit</h2>
+    <form method='post' enctype='multipart/form-data'>
+    <input name='name' placeholder='Nom'>
+    <input name='price' placeholder='Prix'>
+    <input name='size' placeholder='Taille'>
+    <input type='file' name='img'>
+    <button>Ajouter</button>
+    </form>
+    </div>
+    """
+
+# ================= CART =================
+@app.route("/add_cart/<int:id>")
+def add_cart(id):
+    if "user" not in session:
+        return redirect("/login")
+
+    user = db().execute("SELECT id FROM users WHERE username=?", (session["user"],)).fetchone()
+
+    db().execute("INSERT INTO cart(user_id,product_id,qty) VALUES(?,?,1)",
+                 (user["id"], id))
+    db().commit()
+
+    return redirect("/cart")
+
+# ================= VIEW CART =================
+@app.route("/cart")
+def cart():
+    if "user" not in session:
+        return redirect("/login")
+
+    user = db().execute("SELECT id FROM users WHERE username=?", (session["user"],)).fetchone()
+
+    items = db().execute("""
+    SELECT products.name,products.price,cart.qty 
+    FROM cart JOIN products ON cart.product_id=products.id
+    WHERE cart.user_id=?""", (user["id"],)).fetchall()
+
+    html = style + nav() + "<div class='container'><h2>Panier</h2>"
+    total = 0
+
+    for i in items:
+        total += i["price"] * i["qty"]
+        html += f"<p>{i['name']} x{i['qty']} = {i['price']*i['qty']} FCFA</p>"
+
+    html += f"<h3>Total: {total} FCFA</h3>"
+    html += "<a href='/checkout'><button>Payer</button></a></div>"
+
+    return html
+
+# ================= CHECKOUT =================
+@app.route("/checkout")
+def checkout():
+    if "user" not in session:
+        return redirect("/login")
+
+    user = db().execute("SELECT id FROM users WHERE username=?", (session["user"],)).fetchone()
+    cart_items = db().execute("SELECT * FROM cart WHERE user_id=?", (user["id"],)).fetchall()
+
+    for item in cart_items:
+        db().execute("INSERT INTO orders(user_id,product_id,qty) VALUES(?,?,?)",
+                     (item["user_id"], item["product_id"], item["qty"]))
+
+    db().execute("DELETE FROM cart WHERE user_id=?", (user["id"],))
+    db().commit()
+
+    return style + nav() + "<div class='container'><h2>Commande validée 🎉</h2></div>"
+
+# ================= RUN =================
+app.run(debug=True)
