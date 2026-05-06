@@ -1,0 +1,7 @@
+vline.db
+*.db
+.env
+__pycache__/
+*.pyc
+*.pyo
+instance/
